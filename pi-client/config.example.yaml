@@ -1,0 +1,7 @@
+tts_server:
+  host: "192.168.1.100"
+  port: 8080
+
+player:
+  poll_interval_seconds: 5
+  volume: 90
