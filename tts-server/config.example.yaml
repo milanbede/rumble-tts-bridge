@@ -1,0 +1,23 @@
+rumble:
+  api_url: "https://api.rumble.com/live_stream/v1.1/updates"
+  api_key: "YOUR_RUMBLE_API_KEY"
+  poll_interval_seconds: 30
+
+tts:
+  voice: "en-US-AriaNeural"
+  rate: "+0%"
+  volume: "+0%"
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  spool_dir: "spool"
+
+events:
+  new_follower: true
+  new_subscriber: true
+  gifted_sub: true
+  live_on: true
+  live_off: false
+  chat_message: false
+  rant: true

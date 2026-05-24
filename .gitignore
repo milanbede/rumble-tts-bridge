@@ -1,0 +1,3 @@
+# TTS server spool directory — ignore contents but track .gitkeep
+tts-server/spool/*
+!tts-server/spool/.gitkeep
