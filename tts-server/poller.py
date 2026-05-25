@@ -115,7 +115,7 @@ class RumblePoller:
                 chat = stream.get("chat", {})
                 for msg in chat.get("recent_messages", []):
                     username = msg.get("username", "") if isinstance(msg, dict) else ""
-                    message = msg.get("message", "") if isinstance(msg, dict) else ""
+                    message = msg.get("text", "") if isinstance(msg, dict) else ""
                     event_id = f"chat/{username}/{message[:32]}"
                     if username and message and not seen("chat", event_id):
                         text = f"{username} said: {message}"
