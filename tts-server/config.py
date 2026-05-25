@@ -10,6 +10,8 @@ import yaml
 REQUIRED_KEYS = {
     "rumble.api_url": str,
     "rumble.api_key": str,
+    "telegram.bot_token": str,
+    "telegram.chat_id": str,
 }
 
 DEFAULT_CONFIG = {
@@ -25,6 +27,10 @@ DEFAULT_CONFIG = {
         "host": "0.0.0.0",
         "port": 8080,
         "spool_dir": "spool",
+    },
+    "telegram": {
+        "bot_token": "",
+        "chat_id": "",
     },
     "events": {
         "new_follower": True,

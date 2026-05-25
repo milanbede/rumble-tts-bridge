@@ -1,8 +1,10 @@
 """tts-server entry point — wires RumblePoller, TTSEngine, and HTTP server."""
 
 import argparse
+import json
 import logging
 import sys
+import urllib.request
 
 from config import load_config
 from poller import Event, RumblePoller
@@ -18,11 +20,25 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def _on_event(tts: TTSEngine, event):
-    """Callback invoked by RumblePoller for each new event."""
+def _on_event(tts: TTSEngine, telegram_conf: dict, event, spool_dir: str):
+    """Callback invoked by RumblePoller — POST event to /announce for TTS+Telegram."""
     log.info("Event received: %s", event)
-    mp3_path = tts.speak(event.text)
-    log.info("MP3 written: %s", mp3_path)
+    payload = json.dumps({
+        "event_type": event.type,
+        "text": event.text,
+        "tts_voice": tts.voice,
+    }).encode()
+    req = urllib.request.Request(
+        "http://localhost:8080/announce",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log.info("Announce response: %s", resp.status)
+    except Exception as exc:
+        log.error("Announce failed: %s", exc)
 
 
 def main() -> None:
@@ -66,11 +82,19 @@ def main() -> None:
         spool_dir=spool_dir,
         host=server_config["host"],
         port=server_config["port"],
+        tts_engine=tts,
+        telegram_conf={
+            "bot_token": config["telegram"]["bot_token"],
+            "chat_id": config["telegram"]["chat_id"],
+        },
     )
     log.info("HTTP server started on %s:%s", server_config["host"], server_config["port"])
 
     # Blocking loop — run() never returns
-    poller.run(lambda event: _on_event(tts, event))
+    poller.run(lambda event: _on_event(tts, {
+        "bot_token": config["telegram"]["bot_token"],
+        "chat_id": config["telegram"]["chat_id"],
+    }, event, spool_dir))
 
 
 if __name__ == "__main__":
