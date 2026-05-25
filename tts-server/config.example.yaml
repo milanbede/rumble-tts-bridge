@@ -1,5 +1,5 @@
 rumble:
-  api_url: "https://api.rumble.com/live_stream/v1.1/updates"
+  api_url: "https://rumble.com/-livestream-api/get-data"
   api_key: "YOUR_RUMBLE_API_KEY"
   poll_interval_seconds: 30
 
@@ -12,6 +12,10 @@ server:
   host: "0.0.0.0"
   port: 8080
   spool_dir: "spool"
+
+telegram:
+  bot_token: "8913561503:AAFN-2rubh3Sej7yJo5DzPL2ynPL64LXx68"
+  chat_id: "7292599600"
 
 events:
   new_follower: true
