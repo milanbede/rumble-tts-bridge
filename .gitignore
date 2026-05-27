@@ -1,0 +1,18 @@
+# TTS server spool directory — ignore contents but track .gitkeep
+tts-server/spool/*
+!tts-server/spool/.gitkeep
+
+# Actual user config (config.example.yaml is the template)
+config.yaml
+**/config.yaml
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# venv
+venv/
+.venv/
