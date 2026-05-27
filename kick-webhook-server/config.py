@@ -62,19 +62,20 @@ def load_config(path: str) -> dict:
         if section not in cfg:
             raise KeyError(section)
 
-    events_raw = cfg.get("events", {})
-    if isinstance(events_raw, dict) and any("." in str(k) for k in events_raw):
-        pass
-    elif isinstance(events_raw, dict):
-        cfg["events"] = _flatten_events(events_raw)
-
-    events = cfg.get("events", {})
+    events_section = cfg.get("events", {})
 
     for key in REQUIRED_KEYS:
         section = key.split(".")[0]
         if section == "events":
+            # Validate nested events keys directly (e.g. "events.channel.followed")
             event_key = key[len("events."):]
-            if event_key not in events:
+            parts = event_key.split(".")
+            node = events_section
+            for part in parts:
+                if part not in node:
+                    raise KeyError(key)
+                node = node[part]
+            if node is None:
                 raise KeyError(key)
         else:
             try:
