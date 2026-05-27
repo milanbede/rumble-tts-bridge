@@ -97,17 +97,16 @@ def main() -> None:
     log.info("RumblePoller ready (api_url=%s)", rumble_config["api_url"])
 
     server_config = config["server"]
+    kitt_bot_url = config.get("kitt_bot_url", "http://127.0.0.1:8082")
     httpd = make_app(
         spool_dir=spool_dir,
         host=server_config["host"],
         port=server_config["port"],
         tts_engine=tts,
-        telegram_conf={
-            "bot_token": config["telegram"]["bot_token"],
-            "chat_id": config["telegram"]["chat_id"],
-        },
+        kitt_bot_url=kitt_bot_url,
     )
     log.info("HTTP server started on %s:%s", server_config["host"], server_config["port"])
+    log.info("KITT bot URL: %s", kitt_bot_url)
 
     # Blocking loop — run() never returns
     poller.run(lambda event: _on_event(tts, {

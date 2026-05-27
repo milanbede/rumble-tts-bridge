@@ -1,5 +1,5 @@
 """HTTP server for tts-server — serves MP3 files, handles ACK deletions,
-and dispatches TTS announcements to Telegram.
+and dispatches TTS announcements to the KITT bot (which forwards to Telegram).
 
 Uses stdlib http.server only (no Flask/FastAPI).
 """
@@ -9,8 +9,6 @@ import json
 import os
 import urllib.error
 import urllib.request
-import urllib.parse
-import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +25,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
       GET /              — JSON listing of files in spool dir
       GET /<name>.mp3   — file content with audio/mpeg content type
       POST /ack          — delete a file from spool dir
-      POST /announce     — TTS + Telegram dispatch (event_type, text, tts_voice)
+      POST /announce     — TTS + KITT bot dispatch (event_type, text, tts_voice)
     """
 
     spool_dir: str = ""
     tts_engine: object = None
     telegram_conf: dict = {}
+    kitt_bot_url: str = "http://127.0.0.1:8082"
 
     # --------------------------------------------------------------------------
     # Route dispatch
@@ -133,8 +132,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # Idempotent: missing file is treated as success
         self._send_json(200, {"deleted": filename})
 
+    def _kitt_intro(self, event_type: str, text: str) -> str:
+        """Prepend KITT-style voice personality intro based on event type."""
+        intro_map = {
+            "subscription": f"KITT here. {text}",
+            "follow":       f"KITT here. New follower: {text}",
+            "gifted_sub":   f"KITT here. {text}",
+            "chat":         f"KITT here. {text}",
+            "live_on":      "KITT here. Stream is live.",
+            "live_off":     "KITT here. Stream has ended.",
+        }
+        return intro_map.get(event_type, f"KITT here. {text}")
+
     def _handle_announce(self):
-        """Generate TTS MP3 and send it + text to Telegram.
+        """Generate TTS MP3 and send it to the KITT bot for Telegram delivery.
 
         Body: {
             "event_type": "subscription|chat|follow|gifted_sub|live_on|live_off",
@@ -142,6 +153,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             "tts_voice": "en-US-AriaNeural"   (optional, overrides engine default)
         }
         Returns 200 {"ok": true} or 500 {"error": "..."}
+
+        The KITT bot (kitt/telegram_bot.py) holds the single Telegram bot token
+        and runs the long-polling loop. This server POSTs the MP3 to the bot's
+        /send-audio HTTP endpoint to avoid the token-conflict issue.
         """
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length == 0:
@@ -163,14 +178,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         event_type = payload.get("event_type", "unknown")
         tts_voice = payload.get("tts_voice")
 
+        # Apply KITT voice personality intro
+        text = self._kitt_intro(event_type, text)
+
         # Build job_id: announce_<event_type>_<timestamp>
         import time
         job_id = f"announce_{event_type}_{int(time.time() * 1000)}"
 
         # Generate MP3
         try:
-            voice = tts_voice if tts_voice else self.tts_engine.voice
-            # Temporarily override voice if different from engine default
             original_voice = None
             if tts_voice and tts_voice != self.tts_engine.voice:
                 original_voice = self.tts_engine.voice
@@ -184,59 +200,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"TTS generation failed: {exc}"})
             return
 
-        # Send to Telegram
+        # Send to KITT bot via /send-audio endpoint
         try:
-            token = self.telegram_conf["bot_token"]
-            chat_id = self.telegram_conf["chat_id"]
-            base_url = f"https://api.telegram.org/bot{token}"
-
-            # 1. Send text message
-            import urllib.error
-            msg_payload = urllib.parse.urlencode({
-                "chat_id": chat_id,
-                "text": f"[{event_type}] {text}",
-            })
-            req = urllib.request.Request(
-                f"{base_url}/sendMessage",
-                data=msg_payload.encode(),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status != 200:
-                    raise Exception(f"sendMessage returned {resp.status}")
-
-            # 2. Send audio file
             with open(mp3_path, "rb") as audio_f:
-                import io
-                audio_data = audio_f.read()
+                mp3_data = audio_f.read()
 
-            boundary = "----FormBoundary7h2k9s8d"
-            body_parts: list[bytes] = [
-                (f"--{boundary}\r\n"
-                 f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n').encode(),
-                (f"--{boundary}\r\n"
-                 f'Content-Disposition: form-data; name="audio"; filename="{job_id}.mp3"\r\n'
-                 f"Content-Type: audio/mpeg\r\n\r\n").encode(),
-                audio_data,
-                f"\r\n--{boundary}--\r\n".encode(),
-            ]
-            import email.mime.multipart
-            req2 = urllib.request.Request(
-                f"{base_url}/sendAudio",
-                data=b"".join(body_parts),
+            caption = f"[{event_type}] {text}"
+            req = urllib.request.Request(
+                self.kitt_bot_url,
+                data=mp3_data,
                 headers={
-                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Content-Type": "audio/mpeg",
+                    "X-Caption": caption,
                 },
             )
-            with urllib.request.urlopen(req2, timeout=30) as resp2:
-                if resp2.status != 200:
-                    raise Exception(f"sendAudio returned {resp2.status}")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                if resp.status != 200:
+                    raise Exception(f"/send-audio returned {resp.status}")
 
         except Exception as exc:
-            self._send_json(500, {"error": f"Telegram dispatch failed: {exc}"})
+            self._send_json(500, {"error": f"KITT bot dispatch failed: {exc}"})
             return
         finally:
-            # Always clean up the temp MP3
             if os.path.exists(mp3_path):
                 try:
                     os.remove(mp3_path)
@@ -341,14 +326,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 # --------------------------------------------------------------------------
 # Public factory
 # --------------------------------------------------------------------------
-def _make_handler(spool_dir: str, tts_engine, telegram_conf: dict):
-    """Return a handler class bound to spool_dir, tts_engine, and telegram_conf."""
+def _make_handler(spool_dir: str, tts_engine, telegram_conf: dict, kitt_bot_url: str = "http://127.0.0.1:8082"):
+    """Return a handler class bound to spool_dir, tts_engine, telegram_conf, and kitt_bot_url."""
     def make_handler_class():
         class H(_Handler):
             pass
         H.spool_dir = spool_dir
         H.tts_engine = tts_engine
         H.telegram_conf = telegram_conf
+        H.kitt_bot_url = kitt_bot_url
         return H
     return make_handler_class()
 
@@ -359,7 +345,7 @@ def _create_httpd(host: str, port: int, handler):
     return httpd
 
 
-def make_app(spool_dir: str, host: str, port: int, tts_engine=None, telegram_conf=None):
+def make_app(spool_dir: str, host: str, port: int, tts_engine=None, telegram_conf=None, kitt_bot_url: str = "http://127.0.0.1:8082"):
     """Create and start a running HTTP server.
 
     Args:
@@ -367,7 +353,8 @@ def make_app(spool_dir: str, host: str, port: int, tts_engine=None, telegram_con
         host: address to bind to
         port: port to listen on
         tts_engine: TTSEngine instance for /announce endpoint
-        telegram_conf: dict with `bot_token` and `chat_id` keys
+        telegram_conf: dict with `bot_token` and `chat_id` keys (deprecated — no longer used directly)
+        kitt_bot_url: base URL of the KITT bot's HTTP API (default: http://127.0.0.1:8082)
 
     Returns:
         The running HTTPServer instance.
@@ -376,7 +363,7 @@ def make_app(spool_dir: str, host: str, port: int, tts_engine=None, telegram_con
         raise ValueError("tts_engine is required for /announce endpoint")
     if telegram_conf is None:
         telegram_conf = {}
-    handler = _make_handler(spool_dir, tts_engine, telegram_conf)
+    handler = _make_handler(spool_dir, tts_engine, telegram_conf, kitt_bot_url=kitt_bot_url)
     httpd = _create_httpd(host, port, handler)
     # Run in a daemon thread so make_app() returns immediately and the server
     # keeps running in the background.

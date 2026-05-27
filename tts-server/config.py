@@ -32,6 +32,10 @@ DEFAULT_CONFIG = {
         "bot_token": "",
         "chat_id": "",
     },
+    # URL of the KITT bot's HTTP API for sending TTS audio to Telegram.
+    # The KITT bot (kitt/telegram_bot.py) runs this server and exposes POST /send-audio.
+    # tts-server POSTs MP3 here instead of calling Telegram directly — resolves the token conflict.
+    "kitt_bot_url": "http://127.0.0.1:8082/send-audio",
     "events": {
         "new_follower": True,
         "new_subscriber": True,

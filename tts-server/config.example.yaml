@@ -14,8 +14,14 @@ server:
   spool_dir: "spool"
 
 telegram:
-  bot_token: "8913561503:AAFN-2rubh3Sej7yJo5DzPL2ynPL64LXx68"
+  bot_token: "8913561503:***"  # kept for reference; no longer used by tts-server
   chat_id: "7292599600"
+
+# KITT bot HTTP API — tts-server POSTs TTS audio here instead of calling Telegram directly.
+# The KITT bot (kitt/telegram_bot.py) runs long-polling on this port and sends to Telegram.
+# This resolves the token-conflict: only the KITT bot process calls the Telegram API.
+# Note: tts-server appends /send-audio to this URL — do NOT include it here.
+kitt_bot_url: "http://127.0.0.1:8082"
 
 events:
   new_follower: true

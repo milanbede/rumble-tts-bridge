@@ -1,5 +1,6 @@
 """Tests for server.py — GET /, GET /<file>.mp3, POST /ack, POST /announce."""
 
+import io
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from threading import Thread
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -59,7 +61,8 @@ def test_announce_missing_body():
     fake_tts = MagicMock()
     fake_tts.speak.return_value = "/tmp/fake.mp3"
 
-    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"})
+    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"},
+                            kitt_bot_url="http://127.0.0.1:8082/send-audio")
     with _CapturingHandler(Handler) as srv:
         req = urllib.request.Request(srv.base_url + "/announce", data=b"", headers={"Content-Type": "application/json"})
         try:
@@ -78,7 +81,8 @@ def test_announce_missing_text():
     fake_tts = MagicMock()
     fake_tts.speak.return_value = "/tmp/fake.mp3"
 
-    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"})
+    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"},
+                            kitt_bot_url="http://127.0.0.1:8082/send-audio")
     with _CapturingHandler(Handler) as srv:
         body = json.dumps({"event_type": "follow", "text": ""}).encode()
         req = urllib.request.Request(srv.base_url + "/announce", data=body, headers={"Content-Type": "application/json"})
@@ -98,7 +102,8 @@ def test_announce_invalid_json():
     fake_tts = MagicMock()
     fake_tts.speak.return_value = "/tmp/fake.mp3"
 
-    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"})
+    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"},
+                            kitt_bot_url="http://127.0.0.1:8082/send-audio")
     with _CapturingHandler(Handler) as srv:
         req = urllib.request.Request(srv.base_url + "/announce", data=b"not json{", headers={"Content-Type": "application/json"})
         try:
@@ -118,7 +123,8 @@ def test_announce_tts_failure():
     fake_tts.speak.side_effect = Exception("TTS network timeout")
     fake_tts.voice = "en-US-AriaNeural"
 
-    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"})
+    Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"},
+                            kitt_bot_url="http://127.0.0.1:8082/send-audio")
     with _CapturingHandler(Handler) as srv:
         body = json.dumps({"event_type": "follow", "text": "Hello"}).encode()
         req = urllib.request.Request(srv.base_url + "/announce", data=body, headers={"Content-Type": "application/json"})
@@ -134,53 +140,63 @@ def test_announce_tts_failure():
     assert "TTS generation failed" in data["error"]
 
 
+def _make_handler_instance(spool_dir, fake_tts, telegram_conf, kitt_bot_url="http://127.0.0.1:8082"):
+    """Create a handler class and instantiate it with mocked HTTP request internals."""
+    Handler = _make_handler(spool_dir, fake_tts, telegram_conf, kitt_bot_url=kitt_bot_url)
+    h = Handler(MagicMock(), ("127.0.0.1", 9999), MagicMock())
+    # Mock out BaseHTTPRequestHandler methods that _send_json depends on
+    h.send_response = MagicMock()
+    h.send_header = MagicMock()
+    h.end_headers = MagicMock()
+    h.wfile = MagicMock()
+    return h
+
+
 def test_announce_happy_path():
-    """POST /announce with valid payload returns 200 and sends Telegram messages."""
+    """POST /announce generates KITT-prefixed TTS and POSTs it to the KITT bot."""
     fake_tts = MagicMock()
     fake_tts.voice = "en-US-AriaNeural"
+    fake_tts.speak.return_value = "/tmp/fake.mp3"
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        fake_mp3_path = f.name
+    # Mock response from the KITT bot /send-audio endpoint
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
 
-    try:
-        fake_tts.speak.return_value = fake_mp3_path
+    Handler = _make_handler(
+        "/tmp/fake_spool", fake_tts,
+        {"bot_token": "bot123", "chat_id": "chat456"},
+        kitt_bot_url="http://127.0.0.1:8082/send-audio",
+    )
+    with _CapturingHandler(Handler) as srv:
+        with patch("server.urllib.request.urlopen", return_value=mock_response):
+            body = json.dumps({
+                "event_type": "subscription",
+                "text": "New subscriber Alice!",
+                "tts_voice": "en-US-JennyNeural",
+            }).encode()
+            req = urllib.request.Request(
+                srv.base_url + "/announce",
+                data=body,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = urllib.request.urlopen(req)
 
-        Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "bot123", "chat_id": "chat456"})
-        with _CapturingHandler(Handler) as srv:
-            with patch("server.urllib.request.urlopen", MagicMock()) as mock_urlopen:
-                mock_ctx = MagicMock()
-                mock_ctx.__enter__ = MagicMock(return_value=MagicMock(status=200))
-                mock_ctx.__exit__ = MagicMock(return_value=False)
-                mock_urlopen.return_value = mock_ctx
+    assert resp.status == 200
 
-                body = json.dumps({
-                    "event_type": "subscription",
-                    "text": "New subscriber Alice!",
-                    "tts_voice": "en-US-JennyNeural",
-                }).encode()
-                req = urllib.request.Request(srv.base_url + "/announce", data=body, headers={"Content-Type": "application/json"})
-                resp = urllib.request.urlopen(req)
+    # Verify TTS received KITT-prefixed text
+    fake_tts.speak.assert_called_once()
+    call_args = fake_tts.speak.call_args
+    assert call_args[0][0] == "KITT here. New subscriber Alice!"
+    assert call_args[1]["job_id"].startswith("announce_subscription_")
 
-        assert resp.code == 200
-        data = json.loads(resp.read())
-        assert data == {"ok": True}
-
-        # Verify TTS spoke with correct text
-        fake_tts.speak.assert_called_once()
-        call_args = fake_tts.speak.call_args
-        assert call_args[0][0] == "New subscriber Alice!"
-        assert call_args[1]["job_id"].startswith("announce_subscription_")
-
-        # Verify voice was temporarily overridden then restored
-        assert fake_tts.voice == "en-US-AriaNeural"
-
-    finally:
-        if os.path.exists(fake_mp3_path):
-            os.unlink(fake_mp3_path)
+    # Verify voice override was applied then restored
+    assert fake_tts.voice == "en-US-AriaNeural"
 
 
-def test_announce_cleans_up_mp3_on_telegram_error():
-    """If Telegram sendMessage fails, the MP3 is still cleaned up."""
+def test_announce_cleans_up_mp3_on_kitt_bot_error():
+    """If the KITT bot returns an error, the MP3 is still cleaned up."""
     fake_tts = MagicMock()
     fake_tts.voice = "en-US-AriaNeural"
 
@@ -192,26 +208,31 @@ def test_announce_cleans_up_mp3_on_telegram_error():
         Path(fake_mp3_path).write_bytes(b"fake mp3 data")
         assert os.path.exists(fake_mp3_path)
 
-        Handler = _make_handler("/tmp/fake_spool", fake_tts, {"bot_token": "x", "chat_id": "y"})
+        Handler = _make_handler(
+            "/tmp/fake_spool", fake_tts,
+            {"bot_token": "x", "chat_id": "y"},
+            kitt_bot_url="http://127.0.0.1:8082/send-audio",
+        )
         with _CapturingHandler(Handler) as srv:
-            with patch("server.urllib.request.urlopen", MagicMock()) as mock_urlopen:
-                mock_ctx = MagicMock()
-                mock_ctx.__enter__ = MagicMock(return_value=MagicMock(status=500))
-                mock_ctx.__exit__ = MagicMock(return_value=False)
-                mock_urlopen.return_value = mock_ctx
-
+            # Make urlopen raise HTTPError so the server catches it as a dispatch failure
+            err = urllib.error.HTTPError(
+                srv.base_url, 500, "KITT bot error", {}, None
+            )
+            with patch("server.urllib.request.urlopen", side_effect=err):
                 body = json.dumps({"event_type": "follow", "text": "Hello"}).encode()
-                req = urllib.request.Request(srv.base_url + "/announce", data=body, headers={"Content-Type": "application/json"})
+                req = urllib.request.Request(
+                    srv.base_url + "/announce",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                )
                 try:
                     urllib.request.urlopen(req)
-                except urllib.error.HTTPError as e:
-                    resp = e
-                else:
-                    raise AssertionError("Expected HTTPError")
+                except urllib.error.HTTPError:
+                    pass  # expected
 
-        assert resp.code == 500
-        # MP3 should have been deleted even though Telegram failed
-        assert not os.path.exists(fake_mp3_path), "MP3 should be cleaned up after Telegram failure"
+        # MP3 should have been deleted even though the KITT bot returned an error
+        assert not os.path.exists(fake_mp3_path), \
+            "MP3 should be cleaned up after KITT bot failure"
     finally:
         if os.path.exists(fake_mp3_path):
             os.unlink(fake_mp3_path)

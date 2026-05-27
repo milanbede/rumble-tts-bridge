@@ -61,7 +61,7 @@ def test_on_event_logs_event_and_speaks(monkeypatch, tmp_path):
     monkeypatch.setattr("main.log", MagicMock(info=lambda msg, *args: logged.append(msg % args)))
 
     ev = Event(type="new_follower", text="New follower: Alice", event_id="follower/Alice")
-    _on_event(fake_tts, ev)
+    _on_event(fake_tts, {"bot_token": "x", "chat_id": "y"}, ev, str(tmp_path))
 
     fake_tts.speak.assert_called_once_with("New follower: Alice")
     assert any("Event received" in msg for msg in logged)
@@ -72,6 +72,7 @@ def test_on_event_logs_event_and_speaks(monkeypatch, tmp_path):
 
 def test_main_wires_all_components(monkeypatch, tmp_path):
     cfg = minimal_config(tmp_path)
+    cfg["kitt_bot_url"] = "http://127.0.0.1:8082"
 
     # Mock load_config to return our controlled config
     mock_load_config = MagicMock(return_value=cfg)
@@ -102,8 +103,8 @@ def test_main_wires_all_components(monkeypatch, tmp_path):
 
     # Mock make_app — track it was called with correct args
     app_calls = []
-    def mock_make_app(spool_dir, host, port, tts_engine=None, telegram_conf=None):
-        app_calls.append((spool_dir, host, port, tts_engine, telegram_conf))
+    def mock_make_app(spool_dir, host, port, tts_engine=None, telegram_conf=None, kitt_bot_url=None):
+        app_calls.append((spool_dir, host, port, tts_engine, telegram_conf, kitt_bot_url))
         return MagicMock()  # httpd replacement
     monkeypatch.setattr("main.make_app", mock_make_app)
 
@@ -126,12 +127,13 @@ def test_main_wires_all_components(monkeypatch, tmp_path):
     assert call_kwargs["state"] is mock_state_instance
 
     assert len(app_calls) == 1
-    spool, host, port, tts_eng, tg_conf = app_calls[0]
+    spool, host, port, tts_eng, tg_conf, kitt_url = app_calls[0]
     assert spool == cfg["server"]["spool_dir"]
     assert host == cfg["server"]["host"]
     assert port == cfg["server"]["port"]
     assert tts_eng is mock_tts_instance
     assert tg_conf == {"bot_token": "test-bot-token", "chat_id": "123456789"}
+    assert kitt_url == "http://127.0.0.1:8082"
 
     # Verify callback fires TTS correctly
     assert captured_callback is not None
