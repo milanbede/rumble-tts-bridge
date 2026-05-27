@@ -1,0 +1,52 @@
+name: Deploy kick-webhook-server on release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  deploy:
+    name: Deploy to Pi Zero 2 W
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            # Ensure deployment directory exists
+            mkdir -p ~/kick-webhook-server
+
+            # Sync the kick-webhook-server directory (exclude __pycache__, .pytest_cache, config.py, spool)
+            rsync -a --exclude='__pycache__' \
+                   --exclude='.pytest_cache' \
+                   --exclude='config.py' \
+                   --exclude='spool' \
+                   --exclude='*.pyc' \
+                   ./kick-webhook-server/ \
+                   ~/kick-webhook-server/
+
+            # Activate venv and install dependencies
+            cd ~/kick-webhook-server
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            # Restart the systemd user service
+            systemctl --user restart kick-webhook-server
+
+            # Give it a moment to start, then health check
+            sleep 3
+            curl -sf http://localhost:8080/health || true
+
+      - name: Report deploy status
+        run: |
+          echo "Deploy triggered for release: ${{ github.event.release.tag_name }}"
