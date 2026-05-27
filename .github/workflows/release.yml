@@ -1,0 +1,58 @@
+name: Release Deployment
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Pi (beloved-speaker)
+    runs-on: ubuntu-latest
+    # Use ephemeral SSH deployment — no persistent runner needed.
+    # The Pi is accessed via SSH with secrets stored in GitHub Actions secrets.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Pi via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            # Create deployment directory if it doesn't exist
+            mkdir -p ~/rumble-tts-bridge
+
+            # Sync tts-server/ directory to the Pi
+            rsync -avz --delete \
+              --exclude='__pycache__/' \
+              --exclude='*.pyc' \
+              --exclude='spool/' \
+              --exclude='.pytest_cache/' \
+              --exclude='venv/' \
+              ./tts-server/ \
+              ${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}:~/rumble-tts-bridge/tts-server/
+
+            # Activate venv and install/update dependencies
+            cd ~/rumble-tts-bridge
+            if [ -d venv ]; then
+              source venv/bin/activate
+              pip install --upgrade -r tts-server/requirements.txt
+            else
+              python3 -m venv venv
+              source venv/bin/activate
+              pip install -r tts-server/requirements.txt
+            fi
+
+            # Restart the systemd user service
+            systemctl --user restart rumble-tts-bridge || true
+
+            echo "Deployment complete"
