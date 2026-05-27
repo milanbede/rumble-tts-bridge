@@ -5,3 +5,7 @@ tts-server/spool/*
 # Actual user config (config.example.yaml is the template)
 config.yaml
 **/config.yaml
+
+# Python bytecode
+__pycache__/
+*.pyc

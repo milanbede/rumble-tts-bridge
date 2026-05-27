@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 
 
 def _on_event(tts: TTSEngine, telegram_conf: dict, event, spool_dir: str):
-    """Callback invoked by RumblePoller — POST event to /announce for TTS+Telegram."""
+    """Callback invoked by RumblePoller — POST event to /announce for TTS+Telegram,
+    and for chat events also stream TTS to Pi Zero speaker."""
     log.info("Event received: %s", event)
     payload = json.dumps({
         "event_type": event.type,
@@ -39,6 +40,24 @@ def _on_event(tts: TTSEngine, telegram_conf: dict, event, spool_dir: str):
             log.info("Announce response: %s", resp.status)
     except Exception as exc:
         log.error("Announce failed: %s", exc)
+
+    # Stream chat TTS to Pi Zero speaker
+    if event.type == "chat_message":
+        pi_payload = json.dumps({
+            "text": event.text,
+            "voice": tts.voice,
+        }).encode()
+        pi_req = urllib.request.Request(
+            "http://localhost:8080/announce-tts",
+            data=pi_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(pi_req, timeout=10) as resp:
+                log.info("Pi Zero TTS response: %s", resp.status)
+        except Exception as exc:
+            log.warning("Pi Zero TTS failed (non-fatal): %s", exc)
 
 
 def main() -> None:

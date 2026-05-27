@@ -7,10 +7,17 @@ Uses stdlib http.server only (no Flask/FastAPI).
 import http.server
 import json
 import os
+import urllib.error
 import urllib.request
+import urllib.parse
 import urllib.parse
 from pathlib import Path
 from typing import Any
+
+import httpx
+
+PI_ZERO_IP = "100.89.216.54"
+PI_ZERO_PORT = 8081
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -44,6 +51,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ack()
         elif self.path == "/announce":
             self._handle_announce()
+        elif self.path == "/announce-tts":
+            self._handle_announce_tts()
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -235,6 +244,79 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     pass
 
         self._send_json(200, {"ok": True})
+
+    def _handle_announce_tts(self):
+        """Generate TTS MP3 and POST it to the Pi Zero TTS endpoint.
+
+        Body: {"text": "...", "voice": "en-US-JennyNeural"} (voice is optional)
+        Returns 200 {"status": "sent", "size": N} or 500 {"error": "..."}
+        """
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length == 0:
+            self._send_json(400, {"error": "Missing request body"})
+            return
+
+        try:
+            body = self.rfile.read(content_length)
+            payload = json.loads(body.decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json(400, {"error": "Invalid JSON"})
+            return
+
+        text = payload.get("text", "").strip()
+        if not text:
+            self._send_json(400, {"error": "Missing 'text' field"})
+            return
+
+        voice = payload.get("voice", "en-US-JennyNeural")
+
+        # Generate MP3
+        import time
+        job_id = f"announce_tts_{int(time.time() * 1000)}"
+        try:
+            original_voice = None
+            if voice != self.tts_engine.voice:
+                original_voice = self.tts_engine.voice
+                self.tts_engine.voice = voice
+            mp3_path = self.tts_engine.speak(text, job_id=job_id)
+            if original_voice is not None:
+                self.tts_engine.voice = original_voice
+        except Exception as exc:
+            self._send_json(500, {"error": f"TTS generation failed: {exc}"})
+            return
+
+        try:
+            with open(mp3_path, "rb") as f:
+                mp3_data = f.read()
+        except OSError as exc:
+            self._send_json(500, {"error": f"Could not read MP3: {exc}"})
+            return
+        finally:
+            if os.path.exists(mp3_path):
+                try:
+                    os.remove(mp3_path)
+                except OSError:
+                    pass
+
+        # Send to Pi Zero
+        try:
+            async def _send():
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(
+                        f"http://{PI_ZERO_IP}:{PI_ZERO_PORT}/tts",
+                        content=mp3_data,
+                        headers={"Content-Type": "audio/mpeg"},
+                    )
+                    resp.raise_for_status()
+                return {"status": "sent", "size": len(mp3_data)}
+
+            import asyncio
+            result = asyncio.run(_send())
+        except Exception as exc:
+            self._send_json(500, {"error": f"Pi Zero dispatch failed: {exc}"})
+            return
+
+        self._send_json(200, result)
 
     # --------------------------------------------------------------------------
     # Helpers
