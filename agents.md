@@ -29,7 +29,13 @@ Environment config, dependency installation, key management, host setup.
 | Pi client scaffold + config | coder | |
 | TTSPlayer implementation + tests | coder | |
 | Pi client main + bt-bridge script | coder | |
+| Kick webhook server scaffold + config | coder | |
+| Kick webhook signature verification + tests | coder | |
+| Kick event mapping + tests | coder | |
+| Kick OAuth token management + tests | coder | |
+| Kick webhook server main + wiring | coder | |
 | README | editor | |
+| Obsidian note | archivist | |
 | Specs | architect | |
 | DevOps setup (Pi Zero OS, BT, bluez-alsa) | devops | |
 | Admin tasks (dep install, key mgmt) | admin | |

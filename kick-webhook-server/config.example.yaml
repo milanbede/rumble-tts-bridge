@@ -1,0 +1,26 @@
+kick:
+  oauth_token: "your_initial_oauth_token_here"
+  client_id: "your_client_id_here"
+  client_secret: "your_client_secret_here"
+  broadcaster_user_id: 12345
+  public_key_pem: |
+    -----BEGIN PUBLIC KEY-----
+    your_kick_ec_public_key_here
+    -----END PUBLIC KEY-----
+
+server:
+  host: "0.0.0.0"
+  port: 8081
+  spool_dir: "../spool"
+
+tts:
+  voice: "en-US-AriaNeural"
+  rate: "+0%"
+  volume: "+0%"
+
+events:
+  channel.followed: true
+  channel.subscription.new: true
+  channel.subscription.gifts: true
+  channel.subscription.renewal: false
+  chat.message.sent: false

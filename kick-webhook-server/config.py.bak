@@ -1,0 +1,76 @@
+"""Config loading for kick-webhook-server."""
+
+import yaml
+
+
+# Top-level sections that must be present
+REQUIRED_SECTIONS = ["kick", "server", "tts", "events"]
+
+# Required keys within each section, in dotted notation.
+# Including the section name itself here (e.g. "events") gives the correct
+# error message when the whole section is absent — "events" not a nested key.
+REQUIRED_KEYS = [
+    # kick section
+    "kick",
+    "kick.oauth_token",
+    "kick.client_id",
+    "kick.client_secret",
+    "kick.broadcaster_user_id",
+    "kick.public_key_pem",
+    # server section
+    "server",
+    "server.host",
+    "server.port",
+    "server.spool_dir",
+    # tts section
+    "tts",
+    "tts.voice",
+    "tts.rate",
+    "tts.volume",
+    # events section
+    "events",
+    "events.channel.followed",
+    "events.channel.subscription.new",
+    "events.channel.subscription.gifts",
+    "events.channel.subscription.renewal",
+    "events.chat.message.sent",
+]
+
+
+def _get_nested(cfg: dict, key: str):
+    """Get a nested key like 'kick.oauth_token' from cfg.
+
+    Raises KeyError if any part is missing OR if the value is None
+    (indicating the key was explicitly null in the YAML).
+    """
+    parts = key.split(".")
+    node = cfg
+    for part in parts:
+        node = node[part]
+    if node is None:
+        raise KeyError(key)
+    return node
+
+
+def load_config(path: str) -> dict:
+    """Load YAML config from ``path`` and return as a dict.
+
+    Validates that all required sections and keys are present.
+    Raises ``KeyError`` with the missing dotted key name if any are absent.
+    """
+    with open(path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    # Check top-level sections
+    for section in REQUIRED_SECTIONS:
+        if section not in cfg:
+            raise KeyError(section)
+
+    # Check nested required keys
+    for key in REQUIRED_KEYS:
+        try:
+            _get_nested(cfg, key)
+        except KeyError:
+            raise KeyError(key)
+
+    return cfg

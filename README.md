@@ -1,18 +1,60 @@
-# rumble-tts-bridge
+# KITT
 
-> MacBook polls Rumble API → edge-tts MP3s → Pi Zero 2 W pulls and plays → same speaker for music and TTS alerts.
+> KITT is a Hermes profile — personal streaming DJ, music controller, and TTS announcement system. Chat with it on Telegram to control the Pi music player, hear replies via TTS, and get Kick stream alerts announced over the Pi speaker.
 
 ## Status
 
-🔴 Planning complete — implementation not started.
+🟡 Planning — `kitt` profile spec complete — implementation not started (kanban: `rumble-tts` board)
+
+**Sub-projects:**
+- `tts-server` — ✅ Running (Rumble polling)
+- `kick-webhook-server` — 🟡 In progress (Kick webhooks)
+- `kitt` profile — 🔴 Planning (this spec)
+
+---
+
+## Quick Start (kitt profile)
+
+```bash
+# Chat with KITT on Telegram — it controls music + responds with TTS
+# Profile: ~/.hermes/profiles/kitt/
+```
+
+---
 
 ## Architecture
 
 ```
-[Rumble API] ──► [MacBook: poller + edge-tts] ──► [HTTP :8080]
-                                                      │
+[Telegram DM] ──► [kitt profile] ──► [LLM]
+                                    │
+                        ┌───────────┴───────────┐
+                        │                       │
+                   [TTS reply]            [music control]
+                        │                       │
+                ┌───────▼───────┐         [SSH to Pi]
+                ▼               ▼         [mpc commands]
+         [send_message]    [spool/]         [mpd]
+         [Telegram audio]  [Pi plays]
+```
+
+**Audio paths (separate):**
+- `spool/` — TTS only: agent Telegram replies + Kick webhook announcements → `pi-client` on Pi
+- `music/` — separate: controlled via `mpc` on Pi, no spool involvement
+
+## Status
+
+🟡 Implementation underway — `kick-webhook-server` (kanban: `rumble-tts` board)
+
+🔴 Planning complete — `pi-client` implementation not started.
+
+## Architecture
+
+```
+[Rumble API] ──► [MacBook: tts-server :8080] ──► [spool/]
+[Kick webhooks] ──► [MacBook: kick-webhook-server :8081] ──► [spool/]
+                                                        │
                                           [Pi Zero 2 W: pull + play]
-                                                      │
+                                                        │
                               [BT A2DP: phone] ──► [speaker + TTS]
 ```
 
@@ -31,6 +73,21 @@ Polls Rumble Live Stream API, generates TTS MP3s via edge-tts, serves them over 
 | `tts.py` | edge-tts wrapper |
 | `server.py` | HTTP server (spool + ACK) |
 | `state.py` | Dedup state store |
+
+### kick-webhook-server (MacBook)
+
+Receives inbound Kick webhooks, generates TTS MP3s via edge-tts, serves them to Pi Zero. Shares the same spool directory as `tts-server`.
+
+| File | Purpose |
+|------|---------|
+| `config.example.yaml` | Config template |
+| `requirements.txt` | Python deps |
+| `main.py` | Entry point |
+| `webhook.py` | Flask server — POST /webhook, GET /health |
+| `signature.py` | ECDSA secp256k1 signature verification |
+| `events.py` | Kick event → TTS text mapping |
+| `oauth.py` | OAuth2 token management |
+| `state.py` | Dedup state store (copied from tts-server) |
 
 ### pi-client (Pi Zero 2 W)
 
@@ -92,7 +149,38 @@ Run:
 python3 main.py --config config.yaml
 ```
 
+### Kick Webhook Server
+
+System deps (same as tts-server):
+```bash
+pip install -r requirements.txt
+```
+
+OAuth setup (first time):
+1. Create app at https://kick.com/developer
+2. Note `client_id` and `client_secret`
+3. Get your `broadcaster_user_id` from `GET /public/v1/channels/{username}`
+4. Subscribe to events:
+```bash
+curl -X POST https://api.kick.com/public/v1/events/subscriptions \
+  -H "Authorization: Bearer $KICK_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"event_types": ["channel.followed","channel.subscription.new","channel.subscription.gifts"], "broadcaster_user_id": YOUR_ID}'
+```
+
+Run:
+```bash
+cd kick-webhook-server
+cp config.example.yaml config.yaml
+# fill in client_id, client_secret, broadcaster_user_id, oauth_token
+python main.py --config config.yaml
+```
+
+Cloudflare Tunnel must point port 8081 to the MacBook for Kick to reach the webhook.
+
 ## Event Types
+
+### Rumble (tts-server)
 
 Enabled by default in `tts-server/config.example.yaml`:
 
@@ -105,6 +193,18 @@ Enabled by default in `tts-server/config.example.yaml`:
 | `live_off` | ❌ | Off by default — verbose |
 | `rant` | ✅ | Superchats/rants |
 | `chat_message` | ❌ | Off by default — very high volume |
+
+### Kick (kick-webhook-server)
+
+Enabled by default in `kick-webhook-server/config.example.yaml`:
+
+| Event | Default | Note |
+|-------|---------|------|
+| `channel.followed` | ✅ | |
+| `channel.subscription.new` | ✅ | |
+| `channel.subscription.gifts` | ✅ | |
+| `channel.subscription.renewal` | ❌ | Off by default — too noisy |
+| `chat.message.sent` | ❌ | Off by default — very high volume |
 
 ## Audio Mixing
 
@@ -151,6 +251,49 @@ player:
   poll_interval_seconds: 5
   volume: 90
 ```
+
+### kick-webhook-server/config.example.yaml
+
+```yaml
+kick:
+  oauth_token: "YOUR_KICK_ACCESS_TOKEN"
+  client_id: "YOUR_CLIENT_ID"
+  client_secret: "YOUR_CLIENT_SECRET"
+  broadcaster_user_id: 123456
+
+server:
+  host: "0.0.0.0"
+  port: 8081
+  spool_dir: "../spool"   # shared with tts-server
+
+tts:
+  voice: "en-US-AriaNeural"
+  rate: "+0%"
+  volume: "+0%"
+
+events:
+  channel.followed: true
+  channel.subscription.new: true
+  channel.subscription.gifts: true
+  channel.subscription.renewal: false
+  chat.message.sent: false
+```
+
+## Auto-Deploy (GitHub Actions)
+
+Releases are auto-deployed to the Pi via GitHub Actions. On every new GitHub Release, the workflow:
+1. Checks out the tag
+2. Rsyncs `kick-webhook-server/` to the Pi via SSH
+3. Installs deps in the venv on the Pi
+4. Restarts the `kick-webhook-server` systemd service
+5. Hits `/health` to verify
+
+See `.github/workflows/release.yml` for the workflow.
+
+**Required GitHub Secrets** (add at https://github.com/milanbede/KITT/settings/secrets/actions):
+- `PI_SSH_KEY` — private key for `milan-bede` user
+- `PI_HOST` — Pi IP or domain (e.g. `192.168.7.170` or tunnel endpoint)
+- `PI_USER` — `milan-bede`
 
 ## License
 
