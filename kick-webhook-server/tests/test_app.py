@@ -55,6 +55,13 @@ def valid_signature_header(timestamp="1234567890"):
     return f"t={timestamp},v1=dGVzdF9zaWduYXR1cmU="
 
 
+def _make_app(config):
+    """Create app with StateStore mocked to avoid disk I/O."""
+    with patch("app.StateStore") as mock_store_cls:
+        mock_store_cls.return_value.seen.return_value = False
+        return create_app(config)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -63,7 +70,7 @@ class TestHealthEndpoint:
     """Test GET /health."""
 
     def test_health_returns_200_and_ok(self):
-        app = create_app(minimal_config())
+        app = _make_app(minimal_config())
         client = app.test_client()
         response = client.get("/health")
         assert response.status_code == 200
@@ -75,29 +82,36 @@ class TestWebhookSignatureVerification:
 
     def test_valid_signature_returns_204(self):
         config = minimal_config()
-        app = create_app(config)
+        app = _make_app(config)
         client = app.test_client()
 
-        payload = json.dumps({"event": "channel.followed", "data": {"user": {"username": "testuser"}}})
+        payload = json.dumps({
+            "event": "channel.followed",
+            "id": "evt_001",
+            "data": {"user": {"username": "testuser"}}
+        })
 
         with patch("app.verify_signature", return_value=True):
             with patch("app.get_or_create_player") as mock_get_player:
                 mock_player = AsyncMock()
-                mock_player.speak = AsyncMock()
+                mock_player.speak_to_file = AsyncMock()
                 mock_get_player.return_value = mock_player
 
-                response = client.post(
-                    "/webhook",
-                    data=payload,
-                    content_type="application/json",
-                    headers={"X-Kick-Signature": valid_signature_header()},
-                )
+                with patch("app.get_valid_token") as mock_get_token:
+                    mock_get_token.return_value = "test_token"
+
+                    response = client.post(
+                        "/webhook",
+                        data=payload,
+                        content_type="application/json",
+                        headers={"X-Kick-Signature": valid_signature_header()},
+                    )
 
         assert response.status_code == 204
 
     def test_invalid_signature_returns_403(self):
         config = minimal_config()
-        app = create_app(config)
+        app = _make_app(config)
         client = app.test_client()
 
         payload = json.dumps({"event": "channel.followed", "data": {"user": {"username": "testuser"}}})
@@ -114,7 +128,7 @@ class TestWebhookSignatureVerification:
 
     def test_missing_signature_returns_403(self):
         config = minimal_config()
-        app = create_app(config)
+        app = _make_app(config)
         client = app.test_client()
 
         payload = json.dumps({"event": "channel.followed", "data": {"user": {"username": "testuser"}}})
@@ -136,7 +150,7 @@ class TestWebhookMalformedJSON:
 
     def test_malformed_json_returns_400(self):
         config = minimal_config()
-        app = create_app(config)
+        app = _make_app(config)
         client = app.test_client()
 
         with patch("app.verify_signature", return_value=True):
@@ -163,18 +177,19 @@ class TestWebhookDisabledEvent:
                 "chat.message.sent": False,             # disabled
             }
         })
-        app = create_app(config)
+        app = _make_app(config)
         client = app.test_client()
 
         payload = json.dumps({
             "event": "channel.subscription.renewal",
+            "id": "evt_renewal",
             "data": {"user": {"username": "reneweduser"}},
         })
 
         with patch("app.verify_signature", return_value=True):
             with patch("app.get_or_create_player") as mock_get_player:
                 mock_player = AsyncMock()
-                mock_player.speak = AsyncMock()
+                mock_player.speak_to_file = AsyncMock()
                 mock_get_player.return_value = mock_player
 
                 response = client.post(
@@ -185,5 +200,5 @@ class TestWebhookDisabledEvent:
                 )
 
         assert response.status_code == 204
-        # speak should NOT have been called because renewal is disabled
-        mock_player.speak.assert_not_called()
+        # speak_to_file should NOT have been called because renewal is disabled
+        mock_player.speak_to_file.assert_not_called()

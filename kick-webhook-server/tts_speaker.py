@@ -56,6 +56,20 @@ class TTSPlayer:
         # Suppress unclosed session warning
         await communicate.stream().aclose()
 
+    async def speak_to_file(self, text: str, path: str) -> None:
+        """Generate MP3 audio to *path* without playing it."""
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=self.voice,
+            rate=self.rate,
+            volume=self.volume,
+        )
+        with open(path, "wb") as f:
+            async for chunk in communicate.stream():
+                if chunk:
+                    f.write(chunk["data"])
+        await communicate.stream().aclose()
+
 
 # ----------------------------------------------------------------------
 # Singleton registry — one player per unique voice name

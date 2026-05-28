@@ -14,8 +14,8 @@ def test_load_config_returns_all_keys():
     """load_config() returns a dict with all required keys when config is valid."""
     config = {
         "kick": {"oauth_token": "tok", "client_id": "id", "client_secret": "sec",
-                 "broadcaster_user_id": 1, "public_key_pem": "-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----"},
-        "server": {"host": "0.0.0.0", "port": 8081, "spool_dir": "../spool"},
+                 "broadcaster_user_id": 1, "public_key_pem": "-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----\n"},
+        "server": {"host": "0.0.0.0", "port": 8081, "spool_dir": "../spool", "tts_server_url": "http://localhost:8080"},
         "tts": {"voice": "en-US-AriaNeural", "rate": "+0%", "volume": "+0%"},
         "events": {"channel.followed": True, "channel.subscription.new": True,
                    "channel.subscription.gifts": True, "channel.subscription.renewal": False,

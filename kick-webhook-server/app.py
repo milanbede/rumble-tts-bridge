@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import uuid
 from typing import Any
 
 from flask import Flask, Request, Response, jsonify, request
 from flask.wrappers import Response as FlaskResponse
 
 from events import _map_kick_event
+from oauth import get_valid_token
 from signature import verify_signature
+from state import StateStore
 from tts_speaker import get_or_create_player
 
 log = logging.getLogger(__name__)
@@ -30,11 +35,27 @@ def create_app(config: dict[str, Any]) -> Flask:
     # Lazily-created TTS player (one per voice, shared across requests)
     _tts_player = None
 
+    # StateStore and OAuth token (loaded from config)
+    spool_dir = config["server"].get("spool_dir")
+    tts_server_url = config["server"].get("tts_server_url", "http://localhost:8080")
+    _state_store = StateStore(spool_dir) if spool_dir else None
+    _oauth_token = None
+
     def get_tts_player():
         nonlocal _tts_player
         if _tts_player is None:
             _tts_player = get_or_create_player(config["tts"])
         return _tts_player
+
+    def get_oauth_token():
+        nonlocal _oauth_token
+        _oauth_token = get_valid_token(
+            config["kick"]["client_id"],
+            config["kick"]["client_secret"],
+            spool_dir,
+            _oauth_token,
+        )
+        return _oauth_token
 
     # ------------------------------------------------------------------
     # Routes
@@ -67,28 +88,47 @@ def create_app(config: dict[str, Any]) -> Flask:
             log.warning("Malformed JSON in webhook payload")
             return Response("Bad Request", status=400)
 
-        # 5. Map to TTS text — 204 if None (disabled / unknown event)
+        # 5. Deduplicate via StateStore
+        event_type = event.get("event", "")
+        event_id = event.get("id", "")
+        if _state_store and event_id and _state_store.seen(event_type, event_id):
+            log.debug("Duplicate event %s/%s — returning 204", event_type, event_id)
+            return Response(status=204)
+        if _state_store:
+            _state_store.mark(event_type, event_id)
+
+        # 6. Map to TTS text — 204 if None (disabled / unknown event)
         tts_text = _map_kick_event(event, config["events"])
         if tts_text is None:
-            log.debug("No TTS text for event %s — returning 204", event.get("event"))
+            log.debug("No TTS text for event %s — returning 204", event_type)
             return Response(status=204)
 
-        # 6. Speak asynchronously (fire-and-forget)
+        # 7. Obtain OAuth token
+        get_oauth_token()
+
+        # 8. Generate MP3 to spool_dir
+        if not spool_dir:
+            log.error("spool_dir not configured — cannot write MP3")
+            return Response("Internal Server Error", status=500)
+
+        os.makedirs(spool_dir, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.mp3"
+        mp3_path = os.path.join(spool_dir, filename)
+
         player = get_tts_player()
-        asyncio = __import__("asyncio")
         try:
-            asyncio.create_task(player.speak(tts_text))
+            asyncio.create_task(player.speak_to_file(tts_text, mp3_path))
         except RuntimeError:
             # No running event loop (e.g., in test client) — run in a background thread
             import threading
 
             def _background_speak():
-                asyncio.run(player.speak(tts_text))
+                asyncio.run(player.speak_to_file(tts_text, mp3_path))
 
             threading.Thread(target=_background_speak, daemon=True).start()
 
-        # 7. Return 204
-        log.info("Queued TTS for event %s: %s", event.get("event"), tts_text)
+        # 9. Return 204
+        log.info("Queued TTS for event %s: %s -> %s", event_type, tts_text, mp3_path)
         return Response(status=204)
 
     # ------------------------------------------------------------------
