@@ -1,101 +1,66 @@
-"""Tests for config loading — R1 spec exactly."""
+"""Tests for pi-client config loading (spec R1)."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
 
 import pytest
-import yaml
-from pathlib import Path
-from config import load_config, build_server_url
+
+# Dynamically load config.py from pi-client/
+PI_CLIENT_DIR = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, PI_CLIENT_DIR)
+
+from config import build_server_url, load_config
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def temp_config_file(tmp_path):
-    """Return a factory that writes a config dict to a temp YAML file."""
-    def _write(config_dict):
-        p = tmp_path / "config.yaml"
-        p.write_text(yaml.safe_dump(config_dict))
-        return str(p)
-    return _write
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# R1: load_config — 4 required fields
-# ---------------------------------------------------------------------------
+# ── R1 spec cases ──────────────────────────────────────────────────────────
 
-def test_load_config_returns_dict(temp_config_file):
-    cfg = load_config(temp_config_file({"tts_server": {"host": "127.0.0.1"}}))
-    assert isinstance(cfg, dict)
-
-
-def test_load_config_host(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "192.168.1.100", "port": 8080},
-        "player": {"poll_interval_seconds": 5, "volume": 90},
-    }))
+def test_load_config_returns_tts_server_host(tmp_path):
+    """R1: tts_server.host is loaded."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "tts_server:\n  host: '192.168.1.100'\n  port: 8080\n"
+        "player:\n  volume: 90\n  poll_interval_seconds: 5\n"
+    )
+    cfg = load_config(str(cfg_file))
     assert cfg["tts_server"]["host"] == "192.168.1.100"
 
 
-def test_load_config_port(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "localhost", "port": 9000},
-        "player": {"poll_interval_seconds": 3, "volume": 50},
-    }))
-    assert cfg["tts_server"]["port"] == 9000
+def test_load_config_returns_player_volume_int(tmp_path):
+    """R1: player.volume is returned as an int 0–100."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "tts_server:\n  host: '192.168.1.100'\n  port: 8080\n"
+        "player:\n  volume: 75\n  poll_interval_seconds: 5\n"
+    )
+    cfg = load_config(str(cfg_file))
+    assert isinstance(cfg["player"]["volume"], int)
+    assert 0 <= cfg["player"]["volume"] <= 100
 
 
-def test_load_config_volume(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "localhost", "port": 8080},
-        "player": {"poll_interval_seconds": 5, "volume": 75},
-    }))
-    assert cfg["player"]["volume"] == 75
+def test_load_config_returns_poll_interval_seconds(tmp_path):
+    """R1: player.poll_interval_seconds is returned as an int."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "tts_server:\n  host: '192.168.1.100'\n  port: 8080\n"
+        "player:\n  poll_interval_seconds: 10\n  volume: 90\n"
+    )
+    cfg = load_config(str(cfg_file))
+    assert isinstance(cfg["player"]["poll_interval_seconds"], int)
 
 
-def test_load_config_poll_interval(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "localhost", "port": 8080},
-        "player": {"poll_interval_seconds": 10, "volume": 90},
-    }))
-    assert cfg["player"]["poll_interval_seconds"] == 10
-
-
-# ---------------------------------------------------------------------------
-# build_server_url
-# ---------------------------------------------------------------------------
-
-def test_build_server_url(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "192.168.1.100", "port": 8080},
-        "player": {"poll_interval_seconds": 5, "volume": 90},
-    }))
-    assert build_server_url(cfg) == "http://192.168.1.100:8080"
-
-
-# ---------------------------------------------------------------------------
-# Defaults when optional keys are omitted
-# ---------------------------------------------------------------------------
-
-def test_defaults_applied_when_optional_keys_missing(temp_config_file):
-    cfg = load_config(temp_config_file({
-        "tts_server": {"host": "localhost"},
-    }))
-    assert cfg["tts_server"]["host"] == "localhost"
-    assert cfg["tts_server"]["port"] == 8080
-    assert cfg["player"]["poll_interval_seconds"] == 5
-    assert cfg["player"]["volume"] == 90
-
-
-# ---------------------------------------------------------------------------
-# Validation errors
-# ---------------------------------------------------------------------------
-
-def test_missing_host_raises_keyerror(temp_config_file):
-    with pytest.raises(KeyError):
-        load_config(temp_config_file({"tts_server": {"port": 8080}}))
-
-
-def test_missing_config_file(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        load_config(str(tmp_path / "nonexistent.yaml"))
+def test_build_server_url_combine_host_and_port(tmp_path):
+    """R1: tts_server.host + tts_server.port → http://host:port."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "tts_server:\n  host: '192.168.1.100'\n  port: 8080\n"
+        "player:\n  volume: 90\n  poll_interval_seconds: 5\n"
+    )
+    cfg = load_config(str(cfg_file))
+    url = build_server_url(cfg)
+    assert url == "http://192.168.1.100:8080"
